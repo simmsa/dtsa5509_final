@@ -3348,7 +3348,7 @@ If your project doesn't fit into Jupyter notebook format (E.g. you built an app 
 -->
 <section id="problem-description" class="level1 page-columns page-full" data-number="1">
 <h1 data-number="1"><span class="header-section-number">1</span> Problem Description</h1>
-<p>This project aims to develop the most accurate pricing model for real estate listings in my local area. We plan to pull data from <a href="https://zillow.com">Zillow</a> using the <code>GetSearchPageState</code> api. This data will be filtered and cleaned using knowledge of the local real estate market. As real estate prices are floating point values we will use multiple regression modeling techniques from simple to complex and compare the results. Using the best performing model we will predict real estate listing prices on new data. The ultimate goal is to find listings that may be undervalued (“good deals”) vs comparable listings.</p>
+<p>This project aims to develop the most accurate pricing model for real estate listings in my local area. We plan to pull data from <a href="https://zillow.com">Zillow</a> using the <code>GetSearchPageState</code> api. This data will be filtered and cleaned using knowledge of the local real estate market. As real estate prices are floating point values we will use multiple regression modeling techniques from simple to complex and compare the results. Using the best performing model we will predict real estate listing prices on new data. The ultimate goal is to find listings that may be undervalued (“good deals”) vs comparable listings. All files used to create this project can be found here <a href="https://github.com/simmsa/dtsa5509_final" class="uri">https://github.com/simmsa/dtsa5509_final</a>.</p>
 <p>To narrow down the listings, and make the result more relevant for the author, this document focuses on real estate listings in the Denver Colorado metropolitan area.</p>
 <p>In <a href="#fig-simple">Figure 1</a> we outline the steps necessary to reach our goal of predicting the price of a real estate listing.</p>
 <div class="column-page page-columns page-full">
@@ -3395,7 +3395,7 @@ flowchart LR
 <h1 data-number="2"><span class="header-section-number">2</span> Exploratory Data Analysis (EDA) Procedure</h1>
 <section id="data-acquisition" class="level2" data-number="2.1">
 <h2 data-number="2.1" class="anchored" data-anchor-id="data-acquisition"><span class="header-section-number">2.1</span> Data Acquisition</h2>
-<p>Data is acquired using the included <code>scraper.py</code> python script. This script interfaces with the <a href="https://www.zillow.com">Zillow.com</a> <code>GetSearchPageState</code> API. This script downloads data by zip code. The initial format of the data is a <code>json</code> file with 6776 real estate listing entries with each row consisting of 91 columns. For further processing we convert this file to <code>csv</code> which is read into a pandas <code>DataFrame</code> object. The initial data is shown using <code>df.info()</code> as executed below:</p>
+<p>Data is acquired using <a href="https://github.com/simmsa/dtsa5509_final/blob/main/scraper.py"><code>scraper.py</code></a> python script and formatted with the <a href="https://github.com/simmsa/dtsa5509_final/blob/main/formatter.py"><code>formatter.py</code></a> python script. This script interfaces with the <a href="https://www.zillow.com">Zillow.com</a> <code>GetSearchPageState</code> API and downloads data by zip code for the included zip codes. The initial format of the data is a <code>json</code> file with 6776 real estate listing entries with each row consisting of 91 columns. For further processing we convert this file using <code>formatter.py</code> into a single <code>csv</code> file which is read into a pandas <code>DataFrame</code> object. The initial data is shown using <code>df.info()</code> as executed below:</p>
 <div class="cell" data-execution_count="1">
 <div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -3497,6 +3497,7 @@ dtypes: bool(17), float64(23), int64(5), object(41)
 memory usage: 3.3+ MB</code></pre>
 </div>
 </div>
+<p>The output above shows that we are working with 6052 rows and 86 columns.</p>
 </section>
 <section id="data-wrangling-cleaning" class="level2" data-number="2.2">
 <h2 data-number="2.2" class="anchored" data-anchor-id="data-wrangling-cleaning"><span class="header-section-number">2.2</span> Data Wrangling / Cleaning</h2>
@@ -3546,6 +3547,7 @@ memory usage: 3.3+ MB</code></pre>
 <section id="imputation" class="level2" data-number="2.5">
 <h2 data-number="2.5" class="anchored" data-anchor-id="imputation"><span class="header-section-number">2.5</span> Imputation</h2>
 <p>Each model has different requirements for the values that are input into the model. To provide a fair comparison between models we are going to pass the same data to all models. First we are going to impute the missing values. Then we are going to create multiple <code>DataFrame</code> that contain specific data types. Linear regression models including single feature linear regression, multi feature linear regression and forward selection work best with numbers. <code>AdaBoostRegressor</code> will work with numbers and boolean values. <code>XGBRegressor</code> is the most flexible, but we will pass the same data as <code>AdaBoostRegressor</code></p>
+<p>We will use <code>KNNImputer</code> to impute the missing values:</p>
 <div class="cell" data-execution_count="6">
 <div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.impute <span class="im">import</span> KNNImputer</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -3817,7 +3819,7 @@ Dep. Variable:                  price   R-squared:                       0.367
 Model:                            OLS   Adj. R-squared:                  0.367
 Method:                 Least Squares   F-statistic:                     1959.
 Date:                Tue, 07 Mar 2023   Prob (F-statistic):               0.00
-Time:                        14:34:55   Log-Likelihood:                -50184.
+Time:                        15:15:01   Log-Likelihood:                -50184.
 No. Observations:                3376   AIC:                         1.004e+05
 Df Residuals:                    3374   BIC:                         1.004e+05
 Df Model:                           1                                         
@@ -3961,7 +3963,7 @@ Dep. Variable:                  price   R-squared:                       0.479
 Model:                            OLS   Adj. R-squared:                  0.478
 Method:                 Least Squares   F-statistic:                     619.3
 Date:                Tue, 07 Mar 2023   Prob (F-statistic):               0.00
-Time:                        14:34:56   Log-Likelihood:                -49857.
+Time:                        15:15:02   Log-Likelihood:                -49857.
 No. Observations:                3376   AIC:                         9.973e+04
 Df Residuals:                    3370   BIC:                         9.976e+04
 Df Model:                           5                                         

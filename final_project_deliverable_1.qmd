@@ -37,7 +37,7 @@ knowledge of the local real estate market.  As real estate
 prices are floating point values we will use multiple regression modeling techniques from simple to
 complex and compare the results. Using the best performing model we will predict real estate listing
 prices on new data. The ultimate goal is to find listings that may be undervalued ("good deals") vs
-comparable listings.
+comparable listings. All files used to create this project can be found here <https://github.com/simmsa/dtsa5509_final>.
 
 To narrow down the listings, and make the result more relevant for the author, this document focuses
 on real estate listings in the Denver Colorado metropolitan area.
@@ -85,9 +85,13 @@ flowchart LR
 
 ## Data Acquisition
 
-Data is acquired using the included `scraper.py` python script. This script interfaces with the [Zillow.com](https://www.zillow.com)
-`GetSearchPageState` API.  This script downloads data by zip code. The initial format of the data is a `json` file
-with 6776 real estate listing entries with each row consisting of 91 columns. For further processing we convert this file to `csv` which is
+Data is acquired using [`scraper.py`](https://github.com/simmsa/dtsa5509_final/blob/main/scraper.py)
+python script and formatted with the
+[`formatter.py`](https://github.com/simmsa/dtsa5509_final/blob/main/formatter.py)
+python script. This script interfaces with the [Zillow.com](https://www.zillow.com)
+`GetSearchPageState` API and downloads data by zip code for the included zip codes. The initial format of the data is a `json` file
+with 6776 real estate listing entries with each row consisting of 91 columns. For further processing
+we convert this file using `formatter.py` into a single `csv` file which is
 read into a pandas `DataFrame` object. The initial data is shown using `df.info()` as executed below:
 
 ```{python}
@@ -96,6 +100,8 @@ import pandas as pd
 df = pd.read_csv("2023_03_04-12_38_22_unique_denver_area.csv")
 df.info()
 ```
+
+The output above shows that we are working with 6052 rows and 86 columns.
 
 ## Data Wrangling / Cleaning
 
@@ -156,6 +162,8 @@ to impute the missing values. Then we are going to create multiple `DataFrame` t
 Linear regression models including single feature linear regression, multi feature linear regression
 and forward selection work best with numbers. `AdaBoostRegressor` will work with numbers and boolean
 values. `XGBRegressor` is the most flexible, but we will pass the same data as `AdaBoostRegressor`
+
+We will use `KNNImputer` to impute the missing values:
 
 ```{python}
 from sklearn.impute import KNNImputer
