@@ -1,0 +1,899 @@
+---
+title: "DTSA 5509 Introduction to Machine Learning - Supervised Learning"
+subtitle: "Final Report - Deliverable 1"
+author: "Andrew Simms"
+date: today
+
+format:
+    html:
+        theme: [custom.scss]
+        mainfont: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
+        monofont: "Menlo"
+        fontsize: "16px"
+        code-overflow: wrap
+
+table-of-contents: true
+number-sections: true
+embed-resources: true
+---
+
+<!--
+
+# Deliverable 1
+
+A Jupyter notebook showing a supervised learning problem description, EDA procedure, analysis (model building and training), result, and discussion/conclusion.
+
+Suppose your work becomes so large that it doesn’t fit into one notebook (or you think it will be less readable by having one large notebook). In that case, you can make several notebooks or scripts in a GitHub repository (as deliverable 3) and submit a report-style notebook or pdf instead.
+
+If your project doesn't fit into Jupyter notebook format (E.g. you built an app that uses ML), write your approach as a report and submit it in a pdf form.
+
+-->
+
+# Problem Description
+
+This project aims to develop the most accurate pricing model for real estate listings in my local area. We
+plan to pull data from [Zillow](https://zillow.com) using the `GetSearchPageState` api. This data will be filtered and cleaned using
+knowledge of the local real estate market.  As real estate
+prices are floating point values we will use multiple regression modeling techniques from simple to
+complex and compare the results. Using the best performing model we will predict real estate listing
+prices on new data. The ultimate goal is to find listings that may be undervalued ("good deals") vs
+comparable listings.
+
+To narrow down the listings, and make the result more relevant for the author, this document focuses
+on real estate listings in the Denver Colorado metropolitan area.
+
+In @fig-simple we outline the steps necessary to reach our goal of predicting the price of a real
+estate listing.
+
+:::{.column-page}
+
+```{mermaid}
+%%| label: fig-simple
+%%| fig-cap: Regression Model Testing Flow Chart
+%%| column: page
+
+%%{
+  init: {
+    'theme': 'base',
+    'themeVariables': {
+      'primaryColor': '#E1F5FE',
+      'primaryTextColor': '#111',
+      'fontFamily': '-apple-system, BlinkMacSystemFont, Roboto, Oxygen, Ubuntu, Cantarell, sans-serif',
+      'fontSize': '14px'
+    }
+  }
+}%%
+
+flowchart LR
+    A(Data Cleaning / Wrangling) --> B(Imputation)
+    B --> C(Correlation Analysis)
+    C --> D(Data Filtering / Optimization)
+    D --> E(Optimized SF Linear Regression)
+    D --> F(Forward Selection)
+    D --> G(AdaBoostRegressor)
+    D --> H(XGBRegressor)
+    E --> I(Analysis)
+    F --> I
+    G --> I
+    H --> I
+    I --> J(Price Prediction)
+```
+
+:::
+
+# Exploratory Data Analysis (EDA) Procedure
+
+## Data Acquisition
+
+Data is acquired using the included `scraper.py` python script. This script interfaces with the [Zillow.com](https://www.zillow.com)
+`GetSearchPageState` API.  This script downloads data by zip code. The initial format of the data is a `json` file
+with 6776 real estate listing entries with each row consisting of 91 columns. For further processing we convert this file to `csv` which is
+read into a pandas `DataFrame` object. The initial data is shown using `df.info()` as executed below:
+
+```{python}
+import pandas as pd
+
+df = pd.read_csv("2023_03_04-12_38_22_unique_denver_area.csv")
+df.info()
+```
+
+## Data Wrangling / Cleaning
+
+For input into our models we need to clean the data. As a first step we should remove columns
+(features) with
+large numbers of null values. For this we can set a threshold and use the `dropna` method
+
+```{python}
+drop_threshold = int(
+    0.8 * len(df)
+)  # Drop columns with more than the threshold percentage of null values
+df = df.dropna(axis=1, thresh=drop_threshold)
+print(len(df.columns))
+```
+
+## Listing Types
+
+There are multiple types of real estate listings in the data:
+
+```{python}
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white")
+sns.set(font="Futura")
+sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+
+df["hdpData_homeInfo_homeType"].value_counts().plot(kind="bar")
+plt.title("hdpData_homeInfo_homeType Categories")
+plt.show()
+```
+
+This shows that a large amount of the data are `SINGLE_FAMILY` listings. We would like to build
+models for listings that are similar, therefore we are going to filter the dataset to show only
+`SINGLE_FAMILY` type listings:
+
+```{python}
+df = df[df['hdpData_homeInfo_homeType'] == 'SINGLE_FAMILY']
+```
+
+## Filtering
+
+To tighten up our dataset let's filter out listings with larger than 10,000 square and cost more
+than \$10,000,000. In this specific real estate market we can also safely filter out listings that
+are smaller that 750 sqft and listings less that \$200,000
+
+```{python}
+df = df[(df['hdpData_homeInfo_price'] < 10_000_000) & (df['hdpData_homeInfo_price'] > 200_000)]
+df = df[(df['area'] < 10_000) & (df['area'] > 750)]
+```
+
+
+## Imputation
+
+Each model has different requirements for the values that are input into the model. To provide a
+fair comparison between models we are going to pass the same data to all models. First we are going
+to impute the missing values. Then we are going to create multiple `DataFrame` that contain specific data types.
+Linear regression models including single feature linear regression, multi feature linear regression
+and forward selection work best with numbers. `AdaBoostRegressor` will work with numbers and boolean
+values. `XGBRegressor` is the most flexible, but we will pass the same data as `AdaBoostRegressor`
+
+```{python}
+from sklearn.impute import KNNImputer
+
+
+def impute_df(input_df):
+    imputer = KNNImputer()
+    columns = input_df.columns
+    input_df = pd.DataFrame(imputer.fit_transform(input_df))
+    input_df.columns = columns
+    return input_df
+
+
+number_df = df.select_dtypes(["number"])
+number_df = impute_df(number_df)
+
+number_df.info()
+```
+
+```{python}
+bool_df = df.select_dtypes(["bool"])
+bool_df = impute_df(bool_df)
+bool_df.info()
+```
+
+```{python}
+bool_df = bool_df.astype('bool')
+bool_df.info()
+```
+
+```{python}
+```
+
+In this process we have made our target of `price` difficult to access. The original price was
+stored as a string in the dataset, with the floating point value stored in
+`hdpData_homeInfo_price`. We fix this in the code below:
+
+```{python}
+number_df = number_df.rename(columns={"hdpData_homeInfo_price": "price"})
+
+number_df_raw = number_df
+```
+
+## Removing Irrelevant Columns
+
+Linear regression is highly sensitive to features that are correlated. Below we analyze the
+contents of `number_df`. Our goal is to remove columns that are duplicates and visualize the
+correlation between features.
+
+:::{.column-page}
+
+```{python}
+
+
+def plot_correlation(input_df, title, annot=True, tick_rot=0):
+    corr = input_df.corr()
+    fig, ax = plt.subplots()
+    sns.heatmap(
+        corr,
+        cmap="vlag",
+        annot=annot,
+        xticklabels=corr.columns,
+        yticklabels=corr.columns,
+        vmin=-1.0,
+        vmax=1.0,
+        fmt=".2f",
+        cbar=False,
+    ).set(title=title)
+    ax.xaxis.tick_top()
+    ax.tick_params(length=0)
+    plt.xticks(rotation=tick_rot)
+    plt.yticks(rotation=0)
+    plt.show()
+
+
+plot_correlation(number_df, "Initial number_df Feature Correlation", annot=False, tick_rot=75)
+```
+
+:::
+
+Looking at the above, there are features that are may negatively influence the regression
+calculation. For a more optimized model we need to remove the values that do not contain information
+that will help build a price prediction model. Below we remove unnecessary columns and cleanup the
+column names. Specifically we are removing numerical values that are unrelated to the price
+calculation of a listing, including the zip code, listing id (`zpid`), and the latitude and
+longitude. We are also removing the `taxAssesedValue` as this is similar to price and can influence
+the final pricing model.
+
+```{python}
+number_df_corr = (
+    number_df.corr()["price"].sort_values(ascending=False).drop_duplicates()
+)
+number_df_corr = number_df_corr.dropna()
+number_df_corr = number_df_corr[lambda x: x != 1.0]
+
+number_df_corr = number_df_corr.drop(
+    [
+        "hdpData_homeInfo_zipcode",
+        "zpid",
+        "hdpData_homeInfo_latitude",
+        "latLong_longitude",
+        "hdpData_homeInfo_livingArea",
+        "hdpData_homeInfo_taxAssessedValue",
+    ]
+)
+
+number_df = number_df[list(number_df_corr.index) + ["price"]]
+number_df.columns = number_df.columns.str.replace(r"hdpData_homeInfo_", "")
+
+number_bool_df = number_df.join(bool_df)
+
+plot_correlation(number_df, "Cleaned number_df_feature_correlation")
+```
+
+Based on the above visualization, `lotAreaValue` is not strongly correlated to any other features.
+For now we will leave it in the data set as we do know if it will provide useful for other models.
+
+
+## Building Training and Test `DataFrame`s
+
+Now that we have our data frames we can split them into training and test sets. Our target is
+going to be `price` and all other columns are going to
+be our features. We are using `train_test_split` to partition the data.
+
+```{python}
+from sklearn.model_selection import train_test_split
+
+test_size = 0.2
+random_state = 42
+
+(
+    lr_train,
+    lr_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+
+target = "price"
+```
+
+## Preparation for Model Comparison
+
+To compare models we need to compute metrics for comparison. We have chosen to compute the mean
+squared error (MSE), the root mean squared error (RMSE), and $R^2$. As we are using the same
+dataset for all models we can safely use $R^2$ as a comparison. The code below calculates these
+values and saves them in `regression_model_stats` for comparison and visualization.
+
+```{python}
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
+
+regression_model_stats = {
+    "Root Mean Squared Error": [],
+    "$R^2$": [],
+}
+
+
+def calc_model_stats(name, i_y_test, i_y_pred):
+    assert len(i_y_test) == len(
+        i_y_pred
+    ), "Test and prediction array lengths do not match!"
+
+    calc_mean_squared_error = mean_squared_error(i_y_test, i_y_pred)
+    calc_root_mean_squared_error = mean_squared_error(i_y_test, i_y_pred, squared=False)
+    calc_mean_absolute_percentage_error = mean_absolute_percentage_error(
+        i_y_test, i_y_pred
+    )
+    calc_r2_score = r2_score(i_y_test, i_y_pred)
+
+    regression_model_stats["Root Mean Squared Error"].append(
+        [name, calc_root_mean_squared_error]
+    )
+    regression_model_stats["$R^2$"].append([name, calc_r2_score])
+
+
+def plot_model_stats(fig_width=12, fig_height=6):
+    num_rows = 1
+    num_cols = 2
+    fig, axes = plt.subplots(
+        nrows=num_rows, ncols=num_cols, figsize=(fig_width, fig_height)
+    )
+
+    iteration = 1
+    for metric, values in regression_model_stats.items():
+        labels = [x[0] for x in values]
+        values = [x[1] for x in values]
+        plt.subplot(num_rows, num_cols, iteration)
+        p = plt.bar(labels, values)
+        plt.title(f"{metric} by Model")
+        if metric == "$R^2$":
+            plt.bar_label(p, ["{:.4f}".format(x) for x in values])
+        else:
+            plt.bar_label(p, ["{:,}".format(int(x)) for x in values])
+        plt.xticks(rotation=-45)
+        iteration += 1
+
+    plt.tight_layout()
+    plt.show()
+```
+
+# Single Feature Linear Regression
+
+## Initial OLS Single Feature Model
+
+To build our single feature linear regression model we are using `statsmodels` ordinary least
+squares (OLS) linear regression functionality. Initially we are building our model using the feature with the highest
+correlation to `price`
+
+```{python}
+import statsmodels.formula.api as smf
+
+feature = lr_train.corr()['price'].sort_values(ascending=False).index[1]
+
+ols_model = smf.ols(formula=f"{target} ~ {feature}", data=lr_train)
+result = ols_model.fit()
+
+print(result.summary())
+```
+
+The result summary above shows a $R^2$ value of 0.415 with an insignificant p value for `area`. This
+indicates that `area` is a good starting point. Below we visualize the regression model.
+
+```{python}
+params = dict(result.params)
+
+plt.scatter(lr_train[feature], lr_train[target], color="steelblue", label="Train")
+plt.scatter(lr_test[feature], lr_test[target], color="orange", label="Test")
+x = range(0, 15000)
+# Intentionally calculate the prediction for each X value
+y = [((params[feature] * i) + params["Intercept"]) for i in x]
+plt.plot(x, y, color="green")
+
+# plt.suptitle(
+#     f"Training Data: {target} against {feature}\n Slope: {params[feature]:.4f}, Intercept:{params['Intercept']:.4f}, $R^2$: {result.rsquared:.4f}"
+# )
+plt.suptitle(
+        "Single Feature Training and Test Data vs. Regression Line"
+)
+plt.xlabel(feature)
+plt.ylabel(target)
+plt.legend()
+plt.show()
+```
+
+
+This initial single feature model looks like a good start! There is a strong visual correlation between the
+regression line and the data. We can see that the test and training data look similar. We can start to calculate some statistics on the output of the model
+for comparison with other models:
+
+```{python}
+
+ols_model = smf.ols(
+    formula=f"{target} ~ {feature}", data=lr_train
+)
+result = ols_model.fit()
+
+lr_predict = result.predict(lr_test[feature])
+
+lr_y_test = list(lr_test[target])
+lr_y_pred = list(lr_predict)
+
+calc_model_stats("SF LinReg", lr_y_test, lr_y_pred)
+plot_model_stats(fig_width=8)
+```
+
+These statistics give us an initial RMSE and $R^2$. These stats alone tell us that the we have
+a relationship between the target and feature. This is a good starting point to compare against other
+models.
+
+# Forward Selection
+
+Our next model builds on the single feature linear regression by adding more feature. We begin by
+finding the single feature model with the highest $R^2$ value. Then we add one feature at a time
+and calculate the $R^2$ value. We note the maximum $R^2$ value and continue to build the model until
+all features have been used. The model with the highest $R^2$ is then used to calculate the
+statistics for the Forward Selection model.
+
+```{python}
+import statsmodels.formula.api as smf
+
+(
+    lr_train,
+    lr_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+
+feature_cols = lr_train.columns.drop(["price"]).to_list()
+
+features = " + ".join(feature_cols)
+best_features = []
+best_rsquared = []
+best_model = []
+
+iterations = len(feature_cols)
+
+for i in range(iterations):
+    this_best_features = ""
+    this_best_rsquared = 0
+    this_best_model = None
+    for feature in feature_cols:
+        this_feature = " + ".join(best_features + [feature])
+        ols_model = smf.ols(
+            formula=f"{target} ~ {this_feature}", data=lr_train
+        )
+        result = ols_model.fit()
+        if result.rsquared > this_best_rsquared:
+            this_best_rsquared = result.rsquared
+            this_best_features = feature
+            this_best_model = result
+
+    feature_cols.remove(this_best_features)
+    best_features.append(this_best_features)
+    best_rsquared.append(this_best_rsquared)
+    best_model.append(this_best_model)
+
+best_index = 0
+max_rsquared = best_rsquared[0]
+
+for i in range(1, len(best_rsquared)):
+    if best_rsquared[i] > max_rsquared:
+        max_rsquared = best_rsquared[i]
+        best_index = i
+
+
+print(" + ".join(best_features[0:best_index]))
+print(best_rsquared[best_index])
+
+```
+
+The output from running forward selection yields a feature string of `area + lot_sqft + bathrooms +
+lotAreaValue`. On the training data this yields ar $R^2$ of 0.489.
+
+```{python}
+lr_predict = best_model[best_index].predict(
+    lr_test
+)
+
+lr_y_test = list(lr_test[target])
+lr_y_pred = list(lr_predict)
+
+calc_model_stats("FS LinReg", lr_y_test, lr_y_pred)
+
+print(best_model[best_index].summary())
+```
+
+## Single Feature vs. Forward Selection Comparison
+
+Below we compare the RMSE and $R^2$ values of the single feature and forward selection models:
+
+:::{.column-page}
+
+```{python}
+#| echo: false
+plot_model_stats(fig_width=8)
+```
+
+We can see that our forward selection model increases $R^2$ by 21.46%. These results show that
+forward selection multi feature linear regression produces a more accurate model than single feature
+linear regression.
+
+:::
+
+# `AdaboostRegressor`
+
+Another option for regression is the `sklearn` `AdaBoostRegressor`. This model has multiple
+parameters that can be tuned for optimal performance. We are going to focus on `max_estimators`
+and `max_depth`. In the code below we split the data into training and test sets and calculate
+$R^2$ vs the number of estimators:
+
+```{python}
+from sklearn.ensemble import AdaBoostRegressor
+from sklearn.tree import DecisionTreeRegressor
+
+y_num = number_df[target].values
+x_num = number_df.drop(labels=[target], axis=1)
+
+(
+    num_train_x,
+    num_test_x,
+    num_train_y,
+    num_test_y,
+) = train_test_split(x_num, y_num, test_size=test_size, random_state=random_state)
+
+
+y_num_bool = number_bool_df[target].values
+x_num_bool = number_bool_df.drop(labels=[target], axis=1)
+
+(
+    num_bool_train_x,
+    num_bool_test_x,
+    num_bool_train_y,
+    num_bool_test_y,
+) = train_test_split(
+    x_num_bool, y_num_bool, test_size=test_size, random_state=random_state
+)
+
+
+adaboost_model = AdaBoostRegressor(random_state=42, n_estimators=100).fit(
+    num_train_x, num_train_y
+)
+adaboost_y_pred = adaboost_model.predict(num_test_x)
+
+max_estimators = 30
+r_squared_list = []
+train_r_squared_list = []
+best_r_squared = 0
+best_estimator = 0
+
+for i in range(1, max_estimators):
+    adaboost_model = AdaBoostRegressor(n_estimators=i, random_state=random_state).fit(
+        num_train_x, num_train_y
+    )
+    adaboost_y_pred = adaboost_model.predict(num_test_x)
+    r_squared = r2_score(num_test_y, adaboost_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_estimator = i
+
+    adaboost_y_pred = adaboost_model.predict(num_train_x)
+    r_squared = r2_score(num_train_y, adaboost_y_pred)
+    train_r_squared_list.append(r_squared)
+
+plt.plot(range(1, max_estimators), train_r_squared_list, color="steelblue", label="Train")
+plt.plot(range(1, max_estimators), r_squared_list, color="orange", label="Test")
+plt.legend()
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("AdaBoost: num_df $R^2$ vs. Number of Estimators")
+plt.show()
+
+print(best_r_squared)
+print(best_estimator)
+```
+
+The above code computes the optimal `n_estimators` for the test data as `4`. There is strong correlation
+between the train and test data and we can be confident that our `n_estimators` value will
+produce an optimal result.
+
+In the code below we perform a similar
+process as above to compute the optimal `DecisionTreeRegressor` `max_depth`.
+
+```{python}
+
+max_depth = 30
+r_squared_list = []
+train_r_squared_list = []
+best_r_squared = 0
+best_depth = 0
+
+for i in range(1, max_depth):
+    adaboost_model = AdaBoostRegressor(
+        n_estimators=best_estimator,
+        random_state=random_state,
+        estimator=DecisionTreeRegressor(max_depth=i),
+    ).fit(num_train_x, num_train_y)
+    adaboost_y_pred = adaboost_model.predict(num_test_x)
+    r_squared = r2_score(num_test_y, adaboost_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_depth = i
+
+    adaboost_y_pred = adaboost_model.predict(num_train_x)
+    r_squared = r2_score(num_train_y, adaboost_y_pred)
+    train_r_squared_list.append(r_squared)
+
+
+plt.plot(range(1, max_depth), train_r_squared_list, color="steelblue", label="Train")
+plt.plot(range(1, max_depth), r_squared_list, color="orange", label="Test")
+plt.legend()
+plt.xlabel("Max Depth")
+plt.ylabel("$R^2$")
+plt.title("AdaBoost: num_df $R^2$ vs. Max Depth")
+plt.show()
+
+print("Test Best R^2:", best_r_squared)
+print("Test Best max_depth:", best_depth)
+```
+
+In the visualization above we see a significant divergence between the training and test data
+sets as we increase `max_depth`. This indicates that the as the model grows in depth it becomes
+more complex. This complexity leads to overfitting of the test data. To prevent overfitting we will use the best test max depth value of `4`.
+
+```{python}
+adaboost_model = AdaBoostRegressor(
+    random_state=42,
+    n_estimators=best_estimator,
+    estimator=DecisionTreeRegressor(max_depth=best_depth),
+).fit(num_train_x, num_train_y)
+adaboost_y_pred = adaboost_model.predict(num_test_x)
+
+calc_model_stats("AdaBoost", num_test_y, adaboost_y_pred)
+```
+
+```{python}
+adaboost_model = AdaBoostRegressor(
+    random_state=42,
+    n_estimators=best_estimator,
+    estimator=DecisionTreeRegressor(max_depth=best_depth),
+).fit(num_bool_train_x, num_bool_train_y)
+adaboost_y_pred = adaboost_model.predict(num_bool_test_x)
+
+calc_model_stats("AdaBoost num_bool", num_bool_test_y, adaboost_y_pred)
+```
+
+## Single Feature vs. Forward Selection vs. AdaBoostRegressor Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+The above visualization shows that `AdaBoostRegressor` improves $R^2$ by 16.99% over single
+feature linear regression. We also calculate $R^2$ using the number and boolean features in the
+`AdaBoost num_bool` column. This model performs slightly better that the optimized adaboost model.
+
+
+# XGBoost
+
+Our final model will be built using the `xgboost` `XGBRegressor` class. Our goal will be to
+optimize the hyperparameters of `XGBRegressor` to maximize $R^2$ on the test data set. The
+`XGBRegressor` is similar to `AdaBoostRegressor` and we will be optimizing the number of
+estimators (`n_estimators`) and the `max_depth` of the decision tree.
+
+
+As XGBoost is a flexible modeling tool it can handle boolean values. We will also create another
+data set containing the boolean values from the original dataframe and compare these against the
+numbers only dataset.
+
+## Feature Importance
+
+XGBoost is similar to RandomForest in that it can show the importance of features. We will use
+this on both the `num_df` and `num_bool_df` to find the most important features.
+
+```{python}
+import xgboost as xgb
+
+booster = "gbtree"
+
+xgb_model = xgb.XGBRegressor(n_jobs=1, booster=booster).fit(num_train_x, num_train_y)
+y_pred = xgb_model.predict(num_test_x)
+
+xgb.plot_importance(xgb_model, title="num_df Feature Importance")
+plt.show()
+```
+
+We can also look at our `num_bool_df` dataset to see if there are any boolean features that
+contribute positively to the prediction accuracy.
+
+:::{.column-page}
+
+```{python}
+
+xgb_model = xgb.XGBRegressor(n_jobs=1, booster=booster).fit(num_bool_train_x, num_bool_train_y)
+y_pred = xgb_model.predict(num_bool_test_x)
+
+xgb.plot_importance(xgb_model, title="num_bool_df Feature Importance")
+plt.show()
+```
+
+:::
+
+There may be a small increase in $R^2$ from inclusion of the boolean variables, specifically in
+features `has3DModel` and `hasVideo`. For now we will focus on the numerical model only
+
+
+```{python}
+min_estimators = 3
+max_estimators = 30
+r_squared_list = []
+train_r_squared_list = []
+
+for i in range(min_estimators, max_estimators):
+    xgb_model = xgb.XGBRegressor(n_estimators=i, random_state=random_state, booster=booster,
+            max_depth=5).fit(
+        num_train_x, num_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_test_x)
+    r_squared_list.append(r2_score(num_test_y, xgb_y_pred))
+
+    xgb_y_pred = xgb_model.predict(num_train_x)
+    train_r_squared_list.append(r2_score(num_train_y, xgb_y_pred))
+
+plt.plot(
+    range(min_estimators, max_estimators),
+    train_r_squared_list,
+    color="steelblue",
+    label="Train",
+)
+plt.plot(
+    range(min_estimators, max_estimators), r_squared_list, color="orange", label="Test"
+)
+plt.legend()
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_df $R^2$ vs. Number of Estimators")
+plt.show()
+```
+
+```{python}
+max_depth = 30
+r_squared_list = []
+train_r_squared_list = []
+best_depth = 0
+best_r_squared = 0
+
+for i in range(1, max_depth):
+    xgb_model = xgb.XGBRegressor(max_depth=i, n_estimators=best_estimator,
+            random_state=random_state, booster=booster).fit(
+        num_train_x, num_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_test_x)
+    r_squared = r2_score(num_test_y, xgb_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_depth = i
+
+    xgb_y_pred = xgb_model.predict(num_train_x)
+    r_squared = r2_score(num_train_y, xgb_y_pred)
+    train_r_squared_list.append(r_squared)
+
+plt.plot(range(1, max_estimators), train_r_squared_list, color="steelblue", label="Train")
+plt.plot(range(1, max_estimators), r_squared_list, color="orange", label="Test")
+plt.legend()
+plt.xlabel("Max Depth")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_df $R^2$ vs. Max Depth")
+plt.show()
+print(best_r_squared)
+print(best_depth)
+
+xgb_model = xgb.XGBRegressor(n_estimators=best_estimator, max_depth=best_depth, booster=booster).fit(num_train_x, num_train_y)
+y_pred = xgb_model.predict(num_test_x)
+
+calc_model_stats("XGBoost", num_test_y, y_pred)
+```
+
+We will also build a model on the `num_bool` `DataFrame`, passing the calculated depth and estimator
+values for `max_depth` and `n_estimators`. Will the addition of the boolean features increase
+$R^2$?
+
+```{python}
+xgb_model = xgb.XGBRegressor(n_estimators=best_estimator, max_depth=best_depth, booster=booster).fit(num_bool_train_x, num_bool_train_y)
+y_pred = xgb_model.predict(num_bool_test_x)
+
+calc_model_stats("XGBoost num_bool", num_bool_test_y, y_pred)
+```
+
+```{python}
+min_estimators = 3
+max_estimators = 30
+r_squared_list = []
+train_r_squared_list = []
+best_estimator = 0
+best_r_squared = 0
+
+for i in range(min_estimators, max_estimators):
+    xgb_model = xgb.XGBRegressor(n_estimators=i, random_state=random_state, booster=booster).fit(
+        num_bool_train_x, num_bool_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_bool_test_x)
+    r_squared = r2_score(num_bool_test_y, xgb_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_estimator = i
+
+    xgb_y_pred = xgb_model.predict(num_bool_train_x)
+    r_squared = r2_score(num_bool_train_y, xgb_y_pred)
+    train_r_squared_list.append(r_squared)
+
+plt.plot(
+    range(min_estimators, max_estimators),
+    train_r_squared_list,
+    color="steelblue",
+    label="Train",
+)
+plt.plot(
+    range(min_estimators, max_estimators), r_squared_list, color="orange", label="Test"
+)
+plt.legend()
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_bool_df $R^2$ vs. Number of Estimators")
+plt.show()
+print(best_r_squared)
+print(best_estimator)
+```
+
+## Final Model Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+Interestingly we see that `XGBRegressor` performs significantly worse that `AdaBoostRegressor`. This
+is most likely to be due to a failure to tune the model parameters correctly. This may also be a
+factor data selected in the test and train data sets. It may be worthwhile to optimize xgboost
+further, but that falls outside the scope of this project.
+
+# Conclusion
+
+In this project we used real world real estate listing data to predict housing prices. Starting with
+6052 entries and 86 columns, we
+cleaned and filtered the data set. This resulted in a dataset with 4220 entries and 6 numerical
+features. This data was split into training and test sets for input into our models. We then build
+the following models in order:
+
+1. Single Feature Linear Regression
+2. Forward Selection Linear Regression
+3. `AdaBoostRegressor`
+    * Optimized `n_estimators` and `max_depth`
+    * Compared number only dataset vs number and boolean dataset
+4. `XGBRegressor`
+    * Optimized `n_estimators` and `max_depth`
+    * Compared number only dataset vs number and boolean dataset
+
+From these models we concluded that `AdaBoostRegressor` with the `num_bool_df` resulted in the
+highest $R^2$ value and the lowest RMSE.
+
+We also used `xbg.plot_importance` to visualize the feature importance and found `area` and
+`lot_sqft` to be the most important features for predicting price.
+
+From all we can learn that many different modeling methods can produce similar results on a real
+world data set. There are more variables with more complex modeling methods (`AdaBoostRegressor` and
+        `XGBRegressor`) which may cause them to perform better or worse depending on the input
+parameters. In practice it is necessary to understand and optimize hyperparameters. This requires a
+strong understanding of both the hyperparameters and the underlying model. We find that this project
+provides a good starting point for further price prediction modeling.
+

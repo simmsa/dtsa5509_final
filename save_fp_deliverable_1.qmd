@@ -1,0 +1,1020 @@
+---
+title: "DTSA 5509 Introduction to Machine Learning - Supervised Learning"
+subtitle: "Final Report - Deliverable 1"
+author: "Andrew Simms"
+date: today
+
+format:
+    html:
+        mainfont: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
+        monofont: "Menlo"
+        fontsize: "16px"
+        code-overflow: wrap
+
+table-of-contents: true
+number-sections: true
+embed-resources: true
+---
+
+<!--
+
+# Deliverable 1
+
+A Jupyter notebook showing a supervised learning problem description, EDA procedure, analysis (model building and training), result, and discussion/conclusion.
+
+Suppose your work becomes so large that it doesn’t fit into one notebook (or you think it will be less readable by having one large notebook). In that case, you can make several notebooks or scripts in a GitHub repository (as deliverable 3) and submit a report-style notebook or pdf instead.
+
+If your project doesn't fit into Jupyter notebook format (E.g. you built an app that uses ML), write your approach as a report and submit it in a pdf form.
+
+-->
+
+# Problem Description
+
+Develop the most accurate pricing model for real estate listings in my local area. As real estate
+prices are floating point values we will use multiple regression modeling techniques from simple to
+complex and compare the results. Using the best performing model we will predict real estate listing
+prices on new data. The ultimate goal is to find listings that may be undervalued ("good deals") vs
+comparable listings.
+
+To narrow down the listings, and make the result more relevant for the author, this document focuses
+on real estate listings in the Denver Colorado metropolitan area.
+
+
+In @fig-simple we outline the steps necessary to reach our goal of predicting the price of a real
+estate listing.
+
+We plan to follow the below flow chart for to find the best performing regression model:
+
+:::{.column-page}
+
+```{mermaid}
+%%| label: fig-simple
+%%| fig-cap: Regression Model Testing Flow Chart
+%%| column: page
+
+%%{
+  init: {
+    'theme': 'base',
+    'themeVariables': {
+      'primaryColor': '#E1F5FE',
+      'primaryTextColor': '#111',
+      'fontFamily': '-apple-system, BlinkMacSystemFont, Roboto, Oxygen, Ubuntu, Cantarell, sans-serif',
+      'fontSize': '14px'
+    }
+  }
+}%%
+
+flowchart LR
+    Z(Data Scraping) --> A
+    A(Real Estate Listings) --> B(Single Feature Linear Regression)
+    A --> C(Multi Feature Linear Regression)
+    A --> D(Forward Selection)
+    A --> E(AdaBoostRegressor)
+    A --> F(XGBRegressor)
+    B --> G(Analysis)
+    C --> G
+    D --> G
+    E --> G
+    F --> G
+    G --> H(Best Performing Model)
+    H --> I(Price Prediction)
+```
+
+:::
+
+# Exploratory Data Analysis (EDA) Procedure
+
+## Data Acquisition
+
+Data is acquired using the included `scraper.py` python script. This script interfaces with the [Zillow.com](https://www.zillow.com)
+`GetSearchPageState` API.  This script downloads data by zip code. The initial format of the data is a `json` file
+with 6776 real estate listing entries with each row consisting of 91 columns. For further processing we convert this file to `csv` which is
+read into a pandas `DataFrame` object. The initial data is shown using `df.info()` as executed below:
+
+```{python}
+import pandas as pd
+
+df = pd.read_csv("2023_03_04-12_38_22_unique_denver_area.csv")
+df.info()
+```
+
+## Data Wrangling and Cleaning
+
+For input into our models we need to clean the data. As a first step we should remove columns
+(features) with
+large numbers of null values. For this we can set a threshold and use the `dropna` method
+
+```{python}
+drop_threshold = int(
+    0.8 * len(df)
+)  # Drop columns with more than the threshold percentage of null values
+df = df.dropna(axis=1, thresh=drop_threshold)
+print(len(df.columns))
+```
+
+## Building Model Specific `DataFrame`s
+
+Each model has different requirements for the values that are input into the model. To provide a
+fair comparison between models we are going to pass the same data to all models. First we are going
+to impute the missing values. Then we are going to create multiple `DataFrame` that contain specific data types.
+Linear regression models including single feature linear regression, multi feature linear regression
+and forward selection work best with numbers. `AdaBoostRegressor` will work with numbers and boolean
+values. `XGBRegressor` is the most flexible, but we will pass the same data as `AdaBoostRegressor`
+
+```{python}
+from sklearn.impute import KNNImputer
+
+
+def impute_df(input_df):
+    imputer = KNNImputer()
+    columns = input_df.columns
+    input_df = pd.DataFrame(imputer.fit_transform(input_df))
+    input_df.columns = columns
+    return input_df
+
+
+number_df = df.select_dtypes(["number"])
+number_df = impute_df(number_df)
+
+number_df.info()
+```
+
+```{python}
+bool_df = df.select_dtypes(["bool"])
+bool_df = impute_df(bool_df)
+bool_df.info()
+```
+
+```{python}
+bool_df = bool_df.astype('bool')
+bool_df.info()
+```
+
+```{python}
+# num_bool_df = pd.concat([number_df, bool_df])
+```
+
+In this process we have made our target of `price` difficult to access. The original price was
+stored as a string in the dataset, with the floating point value stored in
+`hdpData_homeInfo_price`. We fix this in the code below:
+
+```{python}
+number_df = number_df.rename(columns={"hdpData_homeInfo_price": "price"})
+# bool_df = bool_df.rename(columns={"hdpData_homeInfo_price": "price"})
+
+number_df_raw = number_df
+```
+
+## Removing Irrelevant Columns
+
+Linear regression is highly sensitive to features that are correlated. Below we analyze the
+contents of `number_df`. Our goal is to remove columns that are duplicates and visualize the
+correlation between features.
+
+```{python}
+number_df_corr = (
+    number_df.corr()["price"].sort_values(ascending=False).drop_duplicates()
+)
+number_df_corr = number_df_corr.dropna()
+number_df_corr = number_df_corr[lambda x: x != 1.0]
+number_df_corr
+```
+
+Looking at the above, there are features that are may negatively influence the regression
+calculation. Here we list these features and build a new `number_df` from the above information:
+
+```{python}
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+number_df_corr = number_df_corr.drop(
+    [
+        "hdpData_homeInfo_zipcode",
+        "zpid",
+        "zpid",
+        "hdpData_homeInfo_latitude",
+        "hdpData_homeInfo_longitude",
+    ]
+)
+
+number_df = number_df[list(number_df_corr.index) + ["price"]]
+number_df.columns = number_df.columns.str.replace(r"hdpData_homeInfo_", "")
+
+sns.set_theme(style="white")
+sns.set(font="Futura")
+sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+
+
+def plot_correlation(input_df, title):
+    corr = input_df.corr()
+    fig, ax = plt.subplots()
+    sns.heatmap(
+        corr,
+        cmap="vlag",
+        annot=True,
+        xticklabels=corr.columns,
+        yticklabels=corr.columns,
+        vmin=-1.0,
+        vmax=1.0,
+        fmt=".2f",
+        cbar=False,
+    ).set(title=title)
+    ax.xaxis.tick_top()
+    ax.tick_params(length=0)
+    plt.xticks(rotation=0)
+    plt.yticks(rotation=0)
+    plt.show()
+
+
+plot_correlation(number_df, "number_df Feature Correlation")
+```
+
+Based on the above visualization, `lotAreaValue` is not strongly correlated to any other features
+and can be safely dropped. A new correlation visualization is shown below:
+
+```{python}
+number_df = number_df.drop("lotAreaValue", axis=1)
+plot_correlation(number_df, "Refined number_df Feature Correlation")
+```
+
+While most of these values
+
+
+
+## Building Training and Test `DataFrame`s
+
+Now that we have our data frames we can split them into training and test sets. Our target is
+going to be price which is stored in `price` and all other columns are going to
+be our features. To prevent overlap of data processing we are going to create `DataFrame`s on a
+per model basis:
+
+```{python}
+from sklearn.model_selection import train_test_split
+
+test_size = 0.2
+random_state = 42
+
+(
+    single_feature_linear_regression_train,
+    single_feature_linear_regression_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+
+(
+    multi_feature_linear_regression_train,
+    multi_feature_linear_regression_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+
+foward_selection_train, foward_selection_test = train_test_split(
+    number_df, test_size=test_size, random_state=random_state
+)
+
+
+target = "price"
+
+# y_num = number_df_raw[target].values
+# x_num = number_df_raw.drop(labels=[target], axis=1)
+
+# y_num_bool = number_bool_df[target].values
+# x_num_bool = number_bool_df.drop(labels=[target], axis=1)
+
+# (
+#     num_train_x,
+#     num_test_x,
+#     num_train_y,
+#     num_test_y,
+# ) = train_test_split(x_num, y_num, test_size=test_size, random_state=random_state)
+
+# (
+#     num_bool_train_x,
+#     num_bool_test_x,
+#     num_bool_train_y,
+#     num_bool_test_y,
+# ) = train_test_split(x_num_bool, y_num_bool, test_size=test_size, random_state=random_state)
+
+# (
+#     xgboost_num_regressor_train_x,
+#     xgboost_num_regressor_test_x,
+#     xgboost_num_regressor_train_y,
+#     xgboost_num_regressor_test_y,
+# ) = train_test_split(x_num, y_num, test_size=test_size, random_state=random_state)
+
+# from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
+
+# import xgboost as xgb
+
+# df = pd.read_csv("2023_03_04-12_38_22_unique_denver_area.csv")
+
+# df.info()
+```
+
+```{python}
+# df.describe()
+```
+
+```{python}
+# df = pd.read_csv("test_json_normalize.csv")
+
+# df["price"] = pd.to_numeric(df["price"])
+
+# df.info()
+```
+
+
+```{python}
+# df.describe()
+```
+
+```{python}
+# number_selections = df.select_dtypes(['number'])
+# selections = df.select_dtypes(['number', 'bool'])
+# selections.info()
+```
+
+```{python}
+# columns_to_delete = [
+#     'availabilityDate', # All null
+#     'hdpData.homeInfo.bathrooms', # Dup of "baths"
+#     'hdpData.homeInfo.bedrooms', # Dup of "beds"
+#     'hdpData.homeInfo.livingArea', # Dup of "area"
+#     'hdpData.homeInfo.videoCount', # Many non null
+#     'hdpData.homeInfo.providerListingID', # Many non null
+#     'variableData', # All null
+#     'unitCount', # Large number of nul
+# ]
+
+# selections = selections.drop(labels=columns_to_delete, axis=1)
+# selections.info()
+```
+
+```{python}
+# y_column = 'hdpData.homeInfo.price'
+# y = selections[y_column]
+# x = selections.drop(labels=[y_column], axis=1)
+
+# y.info()
+```
+
+## Preparation for Model Comparison
+
+To compare models we need to compute metrics for comparison. We have chosen to compute the mean
+squared error (MSE), the root mean squared error (RMSE), and $R^2$. As we are using the same
+dataset for all models we can safely use $R^2$ as a comparison. The code below calculates these
+values and saves them in `regression_model_stats` for comparison and visualization.
+
+```{python}
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
+
+regression_model_stats = {
+    "Root Mean Squared Error": [],
+    "$R^2$": [],
+}
+
+
+def calc_model_stats(name, i_y_test, i_y_pred):
+    assert len(i_y_test) == len(
+        i_y_pred
+    ), "Test and prediction array lengths do not match!"
+
+    calc_mean_squared_error = mean_squared_error(i_y_test, i_y_pred)
+    calc_root_mean_squared_error = mean_squared_error(i_y_test, i_y_pred, squared=False)
+    calc_mean_absolute_percentage_error = mean_absolute_percentage_error(
+        i_y_test, i_y_pred
+    )
+    calc_r2_score = r2_score(i_y_test, i_y_pred)
+
+    regression_model_stats["Root Mean Squared Error"].append(
+        [name, calc_root_mean_squared_error]
+    )
+    regression_model_stats["$R^2$"].append([name, calc_r2_score])
+
+
+def plot_model_stats():
+    num_rows = 1
+    num_cols = 2
+    fig_width = 18
+    fig_height = 6
+    fig, axes = plt.subplots(
+        nrows=num_rows, ncols=num_cols, figsize=(fig_width, fig_height)
+    )
+
+    iteration = 1
+    for metric, values in regression_model_stats.items():
+        labels = [x[0] for x in values]
+        values = [x[1] for x in values]
+        plt.subplot(num_rows, num_cols, iteration)
+        p = plt.bar(labels, values)
+        plt.title(f"{metric} by Model")
+        if metric == "$R^2$":
+            plt.bar_label(p, ["{:.4f}".format(x) for x in values])
+        else:
+            plt.bar_label(p, ["{:,}".format(int(x)) for x in values])
+        plt.xticks(rotation=-45)
+        iteration += 1
+
+    plt.tight_layout()
+    plt.show()
+
+```
+
+
+## Imputation
+
+The scikit implementation of AdaBoost cannot handle missing values. Here we impute the missing
+values
+
+```{python}
+# from sklearn.impute import SimpleImputer
+
+# imputer = SimpleImputer(missing_values=pd.NA, strategy='mean')
+
+# columns = x.columns
+
+# x = pd.DataFrame(imputer.fit_transform(x))
+
+# x.columns = columns
+
+# x.info()
+```
+
+```{python}
+
+
+# x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
+# print(len(x_train))
+# print(len(x_test))
+```
+
+```{python}
+# number_selections.info()
+```
+
+```{python}
+
+# regression_model_stats = {
+#     "mean_squared_error": [],
+#     "root_mean_squared_error": [],
+#     "mean_absolute_percentage_error": [],
+#     "r2_score": []
+# }
+
+
+# def calc_model_stats(name, i_y_test, i_y_pred):
+
+#     assert len(i_y_test) == len(i_y_pred), "Test and prediction array lengths do not match!"
+
+#     calc_mean_squared_error = mean_squared_error(i_y_test, i_y_pred)
+#     calc_root_mean_squared_error = mean_squared_error(i_y_test, i_y_pred, squared=False)
+#     calc_mean_absolute_percentage_error = mean_absolute_percentage_error(i_y_test, i_y_pred)
+#     calc_r2_score = r2_score(i_y_test, i_y_pred)
+
+#     regression_model_stats["mean_squared_error"].append([name, calc_mean_squared_error])
+#     regression_model_stats["root_mean_squared_error"].append([name, calc_root_mean_squared_error])
+#     regression_model_stats["mean_absolute_percentage_error"].append([name, calc_mean_absolute_percentage_error])
+#     regression_model_stats["r2_score"].append([name, calc_r2_score])
+
+#     print(f"{name} MSE", mean_squared_error(i_y_test, i_y_pred))
+#     print(f"{name} RMSE", mean_squared_error(i_y_test, i_y_pred, squared=False))
+#     print(f"{name} MAPE", mean_absolute_percentage_error(i_y_test, i_y_pred))
+#     print(f"{name} R2", r2_score(i_y_test, i_y_pred))
+```
+
+# Single Feature Linear Regression
+
+## Building OLS Model
+
+```{python}
+import statsmodels.formula.api as smf
+
+feature = single_feature_linear_regression_train.corr()['price'].sort_values(ascending=False).index[1]
+
+ols_model = smf.ols(formula=f"{target} ~ {feature}", data=single_feature_linear_regression_train)
+result = ols_model.fit()
+
+print(result.summary())
+
+lr_predict = result.predict(single_feature_linear_regression_test[feature])
+
+lr_y_test = list(single_feature_linear_regression_test[target])
+lr_y_pred = list(lr_predict)
+
+# calc_model_stats("SF LinReg", lr_y_test, lr_y_pred)
+
+print(regression_model_stats)
+```
+
+V
+
+```{python}
+params = dict(result.params)
+
+ax = single_feature_linear_regression_test.plot(x=feature, y=target, kind="scatter")
+x = range(0, 15000)
+# Intentionally calculate the prediction for each X value
+y = [((params[feature] * i) + params["Intercept"]) for i in x]
+ax.plot(x, y, color="green")
+
+plt.suptitle(
+    f"{target} against {feature}\n Slope: {params[feature]:.4f}, Intercept:{params['Intercept']:.4f}, $R^2$: {result.rsquared:.4f}"
+)
+plt.show()
+```
+
+We may be able to clean this up if we remove some price and area outliers:
+
+First let's look at the distribution of price and area:
+
+```{python}
+# number_bool_df = pd.concat([number_df, bool_df])
+number_bool_df = number_df.join(bool_df)
+
+print(len(number_df.columns))
+print(len(bool_df.columns))
+
+print(len(number_bool_df.columns))
+
+number_bool_df.info()
+```
+
+:::{.column-page}
+
+```{python}
+sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
+number_df['price'].plot(kind='kde', title="price Distribution Pre Filtering", ax=axes[0])
+number_df = number_df.loc[number_df["price"] < 2_000_000]
+number_df = number_df.loc[number_df["price"] > 200_000]
+# number_bool_df = number_bool_df[number_bool_df["price"] < 2_000_000]
+# number_bool_df = number_bool_df[number_bool_df["price"] > 200_000]
+number_df['price'].plot(kind='kde', title="price Distribution Post Filtering", ax=axes[1])
+
+plt.show()
+```
+
+```{python}
+number_bool_df = number_bool_df.loc[number_bool_df["price"] < 2_000_000]
+number_bool_df = number_bool_df.loc[number_bool_df["price"] > 200_000]
+number_bool_df.info()
+```
+
+
+```{python}
+sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
+
+number_df['area'].plot(kind='kde', title="area Distribution Pre Filtering", ax=axes[0])
+number_df = number_df[number_df["area"] < 8000]
+number_df = number_df[number_df["area"] > 400]
+number_bool_df = number_bool_df[number_bool_df["area"] < 8000]
+number_bool_df = number_bool_df[number_bool_df["area"] > 400]
+number_df['area'].plot(kind='kde', title="area Distribution Post Filtering", ax=axes[1])
+
+plt.show()
+```
+## Filtering Outliers
+
+To filter outliers we must take a look at the distribution of `price` and `area`. These will give an
+indication of how normal the values are distributed and guide us a filtering method.
+
+:::{.column-page}
+
+```{python}
+number_bool_df = number_df.join(bool_df)
+
+# sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+# fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
+# number_df['price'].plot(kind='kde', title="price Distribution Pre Filtering", ax=axes[0])
+# number_df = number_df.loc[number_df["price"] < 2_000_000]
+# number_df = number_df.loc[number_df["price"] > 200_000]
+# number_bool_df = number_bool_df[number_bool_df["price"] < 2_000_000]
+# number_bool_df = number_bool_df[number_bool_df["price"] > 200_000]
+# number_df['price'].plot(kind='kde', title="price Distribution Post Filtering", ax=axes[1])
+
+# plt.show()
+```
+
+The above visualization shows the initial `price` distribution with a large spike and indicated that
+there are outliers. The distribution on the right shows price after filtering to values between
+\$200,000 and \$2,000,000. The distribution is more normal and indicates that outliers have been
+removed.
+
+```{python}
+# sns.set(rc={"figure.figsize": (8, 5)}, font="Futura")
+# fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 5))
+
+# number_df['area'].plot(kind='kde', title="area Distribution Pre Filtering", ax=axes[0])
+# number_df = number_df[number_df["area"] < 8000]
+# number_df = number_df[number_df["area"] > 400]
+# number_bool_df = number_bool_df[number_bool_df["area"] < 8000]
+# number_bool_df = number_bool_df[number_bool_df["area"] > 400]
+# number_df['area'].plot(kind='kde', title="area Distribution Post Filtering", ax=axes[1])
+
+# plt.show()
+```
+
+Again we have safely removed outliers from the `area` feature and now we are working with a more
+focused data set.
+
+:::
+
+:::
+
+```{python}
+number_bool_df.info()
+```
+
+```{python}
+(
+    single_feature_linear_regression_train,
+    single_feature_linear_regression_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+feature = single_feature_linear_regression_train.corr()['price'].sort_values(ascending=False).index[1]
+
+ols_model = smf.ols(formula=f"{target} ~ {feature}", data=single_feature_linear_regression_train)
+result = ols_model.fit()
+
+lr_predict = result.predict(single_feature_linear_regression_test[feature])
+
+lr_y_test = list(single_feature_linear_regression_test[target])
+lr_y_pred = list(lr_predict)
+
+calc_model_stats("SF LinReg", lr_y_test, lr_y_pred)
+
+params = dict(result.params)
+
+ax = single_feature_linear_regression_test.plot(x=feature, y=target, kind="scatter")
+x = range(0, 8000)
+# Intentionally calculate the prediction for each X value
+y = [((params[feature] * i) + params["Intercept"]) for i in x]
+ax.plot(x, y, color="green")
+
+plt.suptitle(
+    f"{target} against {feature}\n Slope: {params[feature]:.4f}, Intercept:{params['Intercept']:.4f}, $R^2$: {result.rsquared:.4f}"
+)
+plt.show()
+```
+
+## Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+
+# Forward Selection
+
+```{python}
+target = "price"
+
+y_num = number_df[target].values
+x_num = number_df.drop(labels=[target], axis=1)
+
+(
+    num_train_x,
+    num_test_x,
+    num_train_y,
+    num_test_y,
+) = train_test_split(x_num, y_num, test_size=test_size, random_state=random_state)
+
+
+y_num_bool = number_bool_df[target].values
+x_num_bool = number_bool_df.drop(labels=[target], axis=1)
+
+(
+    num_bool_train_x,
+    num_bool_test_x,
+    num_bool_train_y,
+    num_bool_test_y,
+) = train_test_split(
+    x_num_bool, y_num_bool, test_size=test_size, random_state=random_state
+)
+
+import statsmodels.formula.api as smf
+
+(
+    lr_train,
+    lr_test,
+) = train_test_split(number_df, test_size=test_size, random_state=random_state)
+
+feature_cols = lr_train.columns.drop(["price"])
+features = " + ".join(feature_cols)
+
+ols_model = smf.ols(
+    formula=f"{target} ~ {features}", data=lr_train
+)
+result = ols_model.fit()
+
+lr_predict = result.predict(
+    lr_test[
+        feature_cols
+    ]
+)
+
+lr_y_test = list(lr_test[target])
+lr_y_pred = list(lr_predict)
+
+calc_model_stats("MF LinReg", lr_y_test, lr_y_pred)
+
+# params = dict(result.params)
+
+# ax = number_df.plot(x=feature, y=target, kind="scatter")
+# x = range(0, 8000)
+# # Intentionally calculate the prediction for each X value
+# y = [((params[feature] * i) + params["Intercept"]) for i in x]
+# ax.plot(x, y, color="green")
+
+# plt.suptitle(
+#     f"{target} against {feature}\n Slope: {params[feature]:.4f}, Intercept:{params['Intercept']:.4f}, $R^2$: {result.rsquared:.4f}"
+# )
+# plt.show()
+```
+
+## Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+```{python}
+# import statsmodels.formula.api as smf
+# import statsmodels.api as sm
+
+# clean_number_selections = number_selections[number_selections['area'].notna()]
+# clean_number_selections = clean_number_selections.rename(columns={"hdpData.homeInfo.price": "price"})
+
+# lr_train, lr_test = train_test_split(clean_number_selections, test_size=0.2, random_state=42)
+
+# lr_train['intercept'] = 1
+
+# ols_model = sm.OLS(lr_train["price"], lr_train[["area"]])
+# result = ols_model.fit()
+
+# print(result.summary())
+
+# lr_predict = result.predict(lr_train["area"])
+
+# lr_y_test = list(lr_train["price"])
+# lr_y_pred = list(lr_predict)
+
+# calc_model_stats("Single Feature Linear Regression", lr_y_test, lr_y_pred)
+```
+
+## Adaboost Regressor
+
+```{python}
+from sklearn.ensemble import AdaBoostRegressor
+from sklearn.tree import DecisionTreeRegressor
+
+adaboost_model = AdaBoostRegressor(random_state=42, n_estimators=100).fit(
+    num_train_x, num_train_y
+)
+adaboost_y_pred = adaboost_model.predict(num_test_x)
+
+calc_model_stats("AB Num", num_test_y, adaboost_y_pred)
+
+# adaboost_model = AdaBoostRegressor(random_state=42, n_estimators=100).fit(
+#     num_bool_train_x, num_bool_train_y
+# )
+# adaboost_y_pred = adaboost_model.predict(num_bool_test_x)
+
+# calc_model_stats("AB NumBool", num_bool_test_y, adaboost_y_pred)
+
+max_estimators = 15
+r_squared_list = []
+best_r_squared = 0
+best_estimator = 0
+
+for i in range(1, max_estimators):
+    adaboost_model = AdaBoostRegressor(n_estimators=i, random_state=random_state).fit(
+        num_train_x, num_train_y
+    )
+    adaboost_y_pred = adaboost_model.predict(num_test_x)
+    r_squared = r2_score(num_test_y, adaboost_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_estimator = i
+
+plt.plot(range(1, max_estimators), r_squared_list)
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("AdaBoost: num_df $R^2$ vs. Number of Estimators")
+plt.show()
+
+print(best_r_squared)
+print(best_estimator)
+
+max_depth = 15
+r_squared_list = []
+best_r_squared = 0
+best_depth = 0
+
+for i in range(1, max_depth):
+    adaboost_model = AdaBoostRegressor(
+        n_estimators=best_estimator,
+        random_state=random_state,
+        estimator=DecisionTreeRegressor(max_depth=i),
+    ).fit(num_train_x, num_train_y)
+    adaboost_y_pred = adaboost_model.predict(num_test_x)
+    r_squared = r2_score(num_test_y, adaboost_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_depth = i
+
+plt.plot(range(1, max_depth), r_squared_list)
+plt.xlabel("Max Depth")
+plt.ylabel("$R^2$")
+plt.title("AdaBoost: num_df $R^2$ vs. Max Depth")
+plt.show()
+
+print(best_r_squared)
+print(best_depth)
+
+adaboost_model = AdaBoostRegressor(
+    random_state=42,
+    n_estimators=best_estimator,
+    estimator=DecisionTreeRegressor(max_depth=best_depth),
+).fit(num_train_x, num_train_y)
+adaboost_y_pred = adaboost_model.predict(num_test_x)
+
+calc_model_stats("AB Num Opt", num_test_y, adaboost_y_pred)
+
+```
+
+## Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+## XGBoost
+
+```{python}
+import xgboost as xgb
+
+xgb_model = xgb.XGBRegressor(n_jobs=1).fit(num_train_x, num_train_y)
+y_pred = xgb_model.predict(num_test_x)
+xgb.plot_importance(xgb_model)
+```
+
+
+
+```{python}
+calc_model_stats("XGB Num", num_test_y, y_pred)
+
+xgb_model = xgb.XGBRegressor(n_jobs=1).fit(num_bool_train_x, num_bool_train_y)
+y_pred = xgb_model.predict(num_bool_test_x)
+
+calc_model_stats("XGB NumBool", num_bool_test_y, y_pred)
+xgb.plot_importance(xgb_model)
+```
+
+
+```{python}
+min_estimators = 3
+max_estimators = 30
+r_squared_list = []
+
+for i in range(min_estimators, max_estimators):
+    xgb_model = xgb.XGBRegressor(n_estimators=i, random_state=random_state).fit(
+        num_train_x, num_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_test_x)
+    r_squared_list.append(r2_score(num_test_y, xgb_y_pred))
+
+plt.plot(range(min_estimators, max_estimators), r_squared_list)
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_df $R^2$ vs. Number of Estimators")
+plt.show()
+```
+
+```{python}
+min_estimators = 3
+max_estimators = 30
+r_squared_list = []
+best_estimator = 0
+best_r_squared = 0
+
+for i in range(min_estimators, max_estimators):
+    xgb_model = xgb.XGBRegressor(n_estimators=i, random_state=random_state).fit(
+        num_bool_train_x, num_bool_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_bool_test_x)
+    r_squared = r2_score(num_bool_test_y, xgb_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_estimator = i
+
+plt.plot(range(min_estimators, max_estimators), r_squared_list)
+plt.xlabel("Number of Estimators")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_bool_df $R^2$ vs. Number of Estimators")
+plt.show()
+print(best_r_squared)
+print(best_estimator)
+```
+
+```{python}
+max_depth = 30
+r_squared_list = []
+best_depth = 0
+best_r_squared = 0
+
+for i in range(1, max_depth):
+    xgb_model = xgb.XGBRegressor(max_depth=i, n_estimators=best_estimator, random_state=random_state).fit(
+        num_bool_train_x, num_bool_train_y
+    )
+    xgb_y_pred = xgb_model.predict(num_bool_test_x)
+    r_squared = r2_score(num_bool_test_y, xgb_y_pred)
+    r_squared_list.append(r_squared)
+
+    if r_squared > best_r_squared:
+        best_r_squared = r_squared
+        best_depth = i
+
+plt.plot(range(1, max_estimators), r_squared_list)
+plt.xlabel("Max Depth")
+plt.ylabel("$R^2$")
+plt.title("XGBoost: num_bool_df $R^2$ vs. Max Depth")
+plt.show()
+print(best_r_squared)
+print(best_depth)
+```
+
+```{python}
+
+xgb_model = xgb.XGBRegressor(n_estimators=best_estimator, max_depth=best_depth).fit(num_bool_train_x, num_bool_train_y)
+y_pred = xgb_model.predict(num_bool_test_x)
+
+calc_model_stats("XGB NumBool Opt", num_bool_test_y, y_pred)
+```
+
+calc_model_stats("XGB NumBool", num_bool_test_y, y_pred)
+
+## Feature Importance
+
+```{python}
+# xgb.plot_importance(xgb_model)
+```
+
+## Comparison
+
+:::{.column-screen}
+
+```{python}
+#| echo: false
+plot_model_stats()
+```
+
+:::
+
+```{python}
+# import matplotlib.pyplot as plt
+
+# colors = ["red", "green", "steelblue", "purple", "cyan"]
+
+# for metric in regression_model_stats.keys():
+#     x_vals = []
+#     x_labels = []
+#     for model_values in regression_model_stats[metric]:
+#         x_labels.append(model_values[0])
+#         x_vals.append(model_values[1])
+
+#     plt.bar(x_labels, x_vals, label=x_labels)
+#     plt.title(metric)
+#     plt.legend()
+#     plt.show()
+```
+
+```{python}
+# from sklearn.metrics import roc_auc_score, roc_curve
+
+# xg_false_positive_rate, xg_true_positive_rate, th = roc_curve(y_test, y_pred)
+# auc = roc_auc_score(y_test, y_pred)
+# plt.plot(false_positive_rate, true_positive_rate, "k-")
+# plt.plot(np.arange(0,1.1, 0.1), np.arange(0,1.1, 0.1), "r--")
+# plt.title("XGBoost ROC Curve")
+# plt.xlabel("False Positive Rate (FPR)")
+# plt.ylabel("True Positive Rate (TPR)")
+# plt.text(0.4, 0.2, f"Area Under Curve (AUC) = {auc:.3f}")
+```

@@ -1,0 +1,366 @@
+---
+title: "DTSA 5509 Introduction to Machine Learning - Supervised Learning"
+subtitle: "Final Report - Deliverable 2"
+author: "Andrew Simms"
+date: today
+format:
+    revealjs:
+        theme: [default, custom_reveal.scss]
+        numbers: true
+        slide-number: true
+        logo: img/cu_boulder_logo_square.svg
+        footer: "Final Report - Deliverable 2 - DTSA 5509"
+---
+
+## Problem Description
+
+:::{.columns}
+
+:::{.column width=50%}
+
+* Predict real estate prices
+* Use real world real estate data from [Zillow](https://www.zillow.com) as input data
+* Wrangle/Clean Data
+* Regression
+    * Single Feature
+    * Forward Selection
+    * `AdaBoostRegressor`
+    * `XGBRegressor`
+:::
+
+:::{.column width=50%}
+![Zillow.com](img/zillow_screenshot.png){#fig-zillow-screenshow}
+:::
+
+:::
+
+
+## Steps
+
+```{mermaid}
+%%| label: fig-simple
+%%| fig-cap: Regression Model Testing Flow Chart
+%%| column: page
+
+%%{
+  init: {
+    'theme': 'base',
+    'themeVariables': {
+      'primaryColor': '#E1F5FE',
+      'primaryTextColor': '#111',
+      'fontFamily': '-apple-system, BlinkMacSystemFont, Roboto, Oxygen, Ubuntu, Cantarell, sans-serif',
+      'fontSize': '14px'
+    }
+  }
+}%%
+
+flowchart LR
+    A(Data Cleaning / Wrangling) --> B(Imputation)
+    B --> C(Correlation Analysis)
+    C --> D(Data Filtering / Optimization)
+    D --> E(Optimized SF Linear Regression)
+    D --> F(Forward Selection)
+    D --> G(AdaBoostRegressor)
+    D --> H(XGBRegressor)
+    E --> I(Analysis)
+    F --> I
+    G --> I
+    H --> I
+    I --> J(Price Prediction)
+```
+
+## Exploratory Data Analysis (EDA)
+
+:::{.columns}
+
+:::{.column width=50%}
+
+* Raw `json` $\rightarrow$ `csv`
+* Remove columns with large numbers of null values (> 20%)
+* Filter to `SINGLE_FAMILY` listings
+* Remove large and small `price` rows
+    * `price` > \$10,000,000
+    * `price` < \$200,000
+* Remove large and small `area` (square footage) rows
+    * `area` > 10,000
+    * `area` < 750
+* Impute missing values
+    * `KNNImputer`
+
+:::
+
+:::{.column width=50%}
+
+```{python}
+#| echo: false
+
+import pandas as pd
+
+df = pd.read_csv("2023_03_04-12_38_22_unique_denver_area.csv")
+df.info()
+```
+
+:::
+
+:::
+
+## Data Setup
+
+* Striving for consistent input into models
+    * $R^2$ comparison done with same data
+* Only numerical features for Single Feature and Forward Selection
+* Add boolean values for `AdaBoostRegressor` and `XGBRegressor`
+* For all models
+    * 80% Train
+    * 20% Test
+* Same `DataFrame`s are used for all models
+* Random state the same for all `train_test_split` functions
+* Random state the same for all models
+
+
+## Feature Correlation Heatmap
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* 6 Features
+* Strong correlation between some features
+    * Need to watch out for collinearity
+* Good starting point for building models
+
+
+:::
+
+:::{.column width=70%}
+
+![Cleaned Feature Correlation](img/cleaned_feature_correlation_fix.png){#fig-feature-corr}
+
+:::
+
+:::
+
+## Single Feature Linear Regression
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* Ordinary Least Squares (OLS)
+    * `ols_model = smf.ols(formula=f"{target} ~ {feature}", data=lr_train)`
+* Target:
+    * `price`
+* Feature:
+    * Highest correlation
+    * `area`
+
+```{python}
+#| eval: false
+ols_model = smf.ols(formula=f"{target} ~ {feature}", data=lr_train)
+result = ols_model.fit()
+```
+
+:::
+
+:::{.column width=70%}
+
+![Single Feature Result Summary](img/single_feature_summary.png){#fig-sf-summary}
+
+:::
+
+:::
+
+## Single Feature Linear Regression Visualization
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* Regression line tracks with `price` and `area`
+* Minimal outliers
+* Good start for further modeling
+
+:::
+
+:::{.column width=70%}
+
+![Single Feature Regression Visualization](img/single_feature.png){#fig-sf-summary}
+
+:::
+
+:::
+
+## Forward Selection
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* Iterate over each feature
+* Maximize $R^2$
+* Best result is used to calculate $R^2$ on test dataset
+
+:::
+
+:::{.column width=70%}
+
+![Forward Selection Summary](img/forward_selection_summary.png){#fig-fs-summary}
+
+:::
+
+:::
+
+## Forward Selection vs. Single Feature
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* $R^2$ increases
+* RMSE decreases
+* Forward Selection is an improvement over Single Feature
+
+:::
+
+:::{.column width=70%}
+
+![Forward Selection vs. Single Feature](img/foward_selection.png){#fig-forward-selection-compare}
+
+:::
+
+:::
+
+## `AdaBoostRegressor`
+
+:::{.columns}
+
+:::{.column width=50%}
+
+* Optimize `n_estimators`
+
+![`AdaBoostRegressor` $R^2$ vs. `n_estimators`](img/ab_num_estimators.png){#fig-ab-estimators}
+
+:::
+
+:::{.column width=50%}
+
+* Avoid overfitting `max_depth`
+
+![`AdaBoostRegressor` $R^2$ vs. `max_depth`](img/ab_max_depth.png){#fig-ab-max-depth}
+
+:::
+
+:::
+
+
+## `AdaBoostRegressor` vs. Previous Models
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* $R^2$ increases
+* RMSE decreases
+* `AdaBoostRegressor` is an improvement over Single Feature and Forward Selection
+
+:::
+
+:::{.column width=70%}
+
+![`AdaBoostRegressor` vs. Forward Selection vs. Single Feature](img/ab_vs_previous.png){#fig-forward-adaboost-compare}
+
+:::
+
+:::
+
+## `XGBRegressor` Feature Selection
+
+:::{.columns}
+
+:::{.column width=50%}
+
+* Determine important features
+
+![Feature Importance](img/num_feature_importance.png){#fig-num-feat-imp}
+
+:::
+
+:::{.column width=50%}
+
+* See if boolean features are important
+
+![Feature Importance Including Boolean Features](img/num_bool_feature_importance.png){#fig-num-bool-feat-imp}
+
+:::
+
+:::
+
+## `XGBRegressor`
+
+:::{.columns}
+
+:::{.column width=50%}
+
+* Optimize `n_estimators`
+
+![`XGBRegressor` $R^2$ vs. `n_estimators`](img/xgb_num_estimators.png){#fig-xg-estimators}
+
+:::
+
+:::{.column width=50%}
+
+* Avoid overfitting `max_depth`
+
+![`XGBRegressor` $R^2$ vs. `max_depth`](img/xgb_max_depth.png){#fig-xg-max-depth}
+
+:::
+
+:::
+
+
+## `XGBRegressor` vs. Previous Models
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* $R^2$ decreases
+* RMSE decreases
+* `XGBRegressor` performs similar to single feature
+    * Problem with hyperparameters or parameters?
+    * Randomness in data or processing?
+
+
+:::
+
+:::{.column width=70%}
+
+![`XGBRegressor` vs. `AdaBoostRegressor` vs. Forward Selection vs. Single Feature](img/final_comparison.png){#fig-forward-adaboost-compare}
+
+:::
+
+:::
+
+## Conclusion
+
+:::{.columns}
+
+:::{.column width=30%}
+
+* `AdaBoostRegressor` performs best with this dataset
+* Adding boolean features can increase $R^2$ a small amount
+* `AdaBoostRegressor` and `XGBRegressor`
+    * Large (> 5) values of `max_depth` can cause overfitting
+* Thank you!
+
+:::
+
+:::{.column width=70%}
+
+![`XGBRegressor` vs. `AdaBoostRegressor` vs. Forward Selection vs. Single Feature](img/final_comparison.png){#fig-forward-adaboost-compare}
+
+:::
+
+:::
+
+

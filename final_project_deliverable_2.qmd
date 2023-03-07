@@ -1,0 +1,25 @@
+---
+title: "DTSA 5509 Introduction to Machine Learning - Supervised Learning"
+subtitle: "Final Report - Deliverable 1"
+author: "Andrew Simms"
+format:
+    html:
+        theme: [custom.scss]
+        mainfont: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif'
+        monofont: "Menlo"
+        fontsize: "16px"
+        html-math-method: "katex"
+        highlight-style: "breezedark"
+
+table-of-contents: true
+number-sections: true
+embed-resources: true
+---
+
+# Deliverable 1
+A Jupyter notebook showing a supervised learning problem description, EDA procedure, analysis (model building and training), result, and discussion/conclusion.
+
+Suppose your work becomes so large that it doesn’t fit into one notebook (or you think it will be less readable by having one large notebook). In that case, you can make several notebooks or scripts in a GitHub repository (as deliverable 3) and submit a report-style notebook or pdf instead.
+
+If your project doesn't fit into Jupyter notebook format (E.g. you built an app that uses ML), write your approach as a report and submit it in a pdf form.
+
